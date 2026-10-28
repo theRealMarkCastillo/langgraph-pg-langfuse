@@ -1,5 +1,7 @@
 # LangGraph + Postgres + Langfuse demos
 
+[![CI](https://github.com/theRealMarkCastillo/langgraph-pg-langfuse/actions/workflows/ci.yml/badge.svg)](https://github.com/theRealMarkCastillo/langgraph-pg-langfuse/actions/workflows/ci.yml)
+
 A set of small, runnable LangGraph (Python) demos that all:
 
 - persist graph state to **PostgreSQL** (`langgraph-checkpoint-postgres`, plus `PostgresStore` + pgvector for long-term memory)
@@ -27,7 +29,7 @@ A set of small, runnable LangGraph (Python) demos that all:
 for the Langfuse stack. uv installs Python 3.12 for you if needed.
 
 ```bash
-git clone https://github.com/<you>/langgraph-pg-langfuse.git && cd langgraph-pg-langfuse
+git clone https://github.com/theRealMarkCastillo/langgraph-pg-langfuse.git && cd langgraph-pg-langfuse
 ```
 
 ```bash
