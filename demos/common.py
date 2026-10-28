@@ -1,9 +1,7 @@
 """Shared wiring for every demo: Postgres checkpointer/store, LLM, embeddings, Langfuse."""
 
-import hashlib
 import json
 import logging
-import math
 import os
 import re
 from collections.abc import Callable, Iterator, Sequence
@@ -129,78 +127,30 @@ def last_human_text(messages: Sequence[AnyMessage]) -> str:
 # --- Embeddings ------------------------------------------------------------
 
 
-class HashingEmbeddings(Embeddings):
-    """Offline bag-of-words embeddings: texts sharing words land close together.
+def make_embeddings() -> tuple[Embeddings, int] | None:
+    """(embeddings, dims) when OPENAI_EMBEDDING_MODEL is set, else None (no vector search).
 
-    Not semantic like a real model, but enough to demo vector recall with no API.
-    A tiny synonym map stands in for the "meaning" a real embedding model learns.
+    Embeddings may use a different endpoint than chat (e.g. DeepSeek chat + OpenAI or
+    Ollama embeddings): OPENAI_EMBEDDING_BASE_URL / OPENAI_EMBEDDING_API_KEY fall back
+    to OPENAI_BASE_URL / OPENAI_API_KEY.
     """
+    model = os.getenv("OPENAI_EMBEDDING_MODEL")
+    if not model:
+        return None
+    base_url = os.getenv("OPENAI_EMBEDDING_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    if not base_url:
+        raise SystemExit("OPENAI_EMBEDDING_MODEL is set but neither OPENAI_EMBEDDING_BASE_URL nor OPENAI_BASE_URL is.")
+    from langchain_openai import OpenAIEmbeddings
 
-    dims = 256
-    _stop = {
-        "the",
-        "a",
-        "an",
-        "i",
-        "my",
-        "me",
-        "is",
-        "am",
-        "to",
-        "of",
-        "and",
-        "you",
-        "do",
-        "what",
-        "how",
-        "should",
-        "about",
-        "user",
-        "said",
-        "in",
-        "over",
-        "prefer",
-    }
-    _related = {
-        "contact": ["email", "phone"],
-        "reach": ["email", "phone"],
-        "call": ["phone"],
-        "where": ["live"],
-        "city": ["live"],
-        "based": ["live"],
-        "located": ["live"],
-    }
-
-    def _embed(self, text: str) -> list[float]:
-        vec = [0.0] * self.dims
-        for word in re.findall(r"[a-z0-9]+", text.lower()):
-            if word in self._stop:
-                continue
-            word = word.rstrip("s")  # crude stemming: emails -> email
-            for w in [word, *self._related.get(word, [])]:
-                vec[int(hashlib.md5(w.encode()).hexdigest(), 16) % self.dims] += 1.0
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        return [v / norm for v in vec]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self._embed(t) for t in texts]
-
-    def embed_query(self, text: str) -> list[float]:
-        return self._embed(text)
-
-
-def make_embeddings() -> tuple[Embeddings, int]:
-    """(embeddings, dims). Online needs OPENAI_EMBEDDING_MODEL (+ OPENAI_EMBEDDING_DIMS)."""
-    if ONLINE and os.getenv("OPENAI_EMBEDDING_MODEL"):
-        from langchain_openai import OpenAIEmbeddings
-
-        return OpenAIEmbeddings(
-            base_url=os.environ["OPENAI_BASE_URL"],
-            api_key=os.getenv("OPENAI_API_KEY") or "not-needed",
-            model=os.environ["OPENAI_EMBEDDING_MODEL"],
-            check_embedding_ctx_length=False,  # tiktoken lookup breaks on non-OpenAI model names
-        ), int(os.getenv("OPENAI_EMBEDDING_DIMS", "1536"))
-    return HashingEmbeddings(), HashingEmbeddings.dims
+    embeddings = OpenAIEmbeddings(
+        base_url=base_url,
+        api_key=os.getenv("OPENAI_EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY") or "not-needed",
+        model=model,
+        check_embedding_ctx_length=False,  # tiktoken lookup breaks on non-OpenAI model names
+    )
+    dims = os.getenv("OPENAI_EMBEDDING_DIMS")
+    # Unset -> ask the model once; pgvector needs the exact size up front.
+    return embeddings, int(dims) if dims else len(embeddings.embed_query("dimension probe"))
 
 
 # --- Postgres --------------------------------------------------------------
@@ -216,13 +166,36 @@ def postgres_checkpointer() -> Iterator[PostgresSaver]:
 
 @contextmanager
 def postgres_store() -> Iterator[PostgresStore]:
-    """Long-term memory shared across threads, with pgvector semantic search."""
-    embeddings, dims = make_embeddings()
-    with PostgresStore.from_conn_string(
-        POSTGRES_URI, index={"dims": dims, "embed": embeddings, "fields": ["text"]}
-    ) as store:
+    """Long-term memory shared across threads.
+
+    With an embedding model configured, values are embedded on put() and searchable by
+    meaning (pgvector). Without one, it's a plain key-value store (no vectors).
+    """
+    configured = make_embeddings()
+    index = None
+    if configured:
+        embeddings, dims = configured
+        _check_vector_dims(dims)
+        index = {"dims": dims, "embed": embeddings, "fields": ["text"]}
+    with PostgresStore.from_conn_string(POSTGRES_URI, index=index) as store:
         store.setup()
         yield store
+
+
+def _check_vector_dims(dims: int) -> None:
+    """pgvector columns have a fixed size; switching embedding models needs a reset."""
+    import psycopg
+
+    with psycopg.connect(POSTGRES_URI) as conn:
+        row = conn.execute(
+            "select format_type(atttypid, atttypmod) from pg_attribute "
+            "where attrelid = to_regclass('store_vectors') and attname = 'embedding'"
+        ).fetchone()
+    if row and row[0] != f"vector({dims})":
+        raise SystemExit(
+            f"Stored memories use {row[0]} but the embedding model returns vector({dims}). "
+            "Switching embedding models needs a fresh store: ./scripts/reset.sh"
+        )
 
 
 # --- Langfuse --------------------------------------------------------------

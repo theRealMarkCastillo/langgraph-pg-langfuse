@@ -4,7 +4,7 @@
 
 A set of small, runnable LangGraph (Python) demos that all:
 
-- persist graph state to **PostgreSQL** (`langgraph-checkpoint-postgres`, plus `PostgresStore` + pgvector for long-term memory)
+- persist graph state to **PostgreSQL** (`langgraph-checkpoint-postgres`, plus `PostgresStore` for long-term memory, with optional pgvector semantic search)
 - send traces to a **self-hosted Langfuse** stack via the Langfuse Python SDK
 - call any **OpenAI-compatible** endpoint, or run fully **offline** with a scripted model
 
@@ -13,7 +13,7 @@ A set of small, runnable LangGraph (Python) demos that all:
 | [`demos.chat`](demos/chat.py) | Thread state in Postgres, conditional routing, token streaming, **time travel / forking** |
 | [`demos.support_agent`](demos/support_agent.py) | **Human-in-the-loop**: tool-calling agent pauses for refund approval across processes; approve / reject / edit; fork a past decision; decision recorded as a **Langfuse score** |
 | [`demos.durable`](demos/durable.py) | **Durable execution**: `RetryPolicy` on a flaky step, a hard crash mid-pipeline, resume without re-running finished steps |
-| [`demos.memory`](demos/memory.py) | **Long-term memory** across threads: `PostgresStore` + pgvector semantic recall, scoped per user via runtime context |
+| [`demos.memory`](demos/memory.py) | **Long-term memory** across threads: `PostgresStore`, scoped per user via runtime context; recalls all memories, or the most relevant ones via **pgvector** when an embedding model is set |
 | [`demos.summarize`](demos/summarize.py) | **Long conversations**: fold old messages into a summary and delete them with `RemoveMessage` |
 | [`demos.fanout`](demos/fanout.py) | **Parallel map-reduce** with the `Send` API and a reducer |
 | [`demos.multi_agent`](demos/multi_agent.py) | **Supervisor + specialist subgraphs** using `Command(goto=...)`, subgraph streaming |
@@ -77,8 +77,10 @@ Set these in `.env` to use a real model; leave `OPENAI_BASE_URL` unset to run of
 | `OPENAI_MAX_TOKENS` | no | `300` | |
 | `OPENAI_TIMEOUT` | no | `60` | seconds |
 | `OPENAI_MAX_RETRIES` | no | `2` | |
-| `OPENAI_EMBEDDING_MODEL` | no | — | for `demos.memory`; offline word-hashing embeddings otherwise |
-| `OPENAI_EMBEDDING_DIMS` | no | `1536` | must match the model |
+| `OPENAI_EMBEDDING_MODEL` | no | — | turns on pgvector semantic recall in `demos.memory` |
+| `OPENAI_EMBEDDING_BASE_URL` | no | `OPENAI_BASE_URL` | embeddings can use another provider than chat |
+| `OPENAI_EMBEDDING_API_KEY` | no | `OPENAI_API_KEY` | |
+| `OPENAI_EMBEDDING_DIMS` | no | auto-detected | vector size; only needed if the probe call is unwanted |
 
 **Offline mode:** each demo passes a small deterministic script to `ScriptedChatModel`
 ([`demos/common.py`](demos/common.py)) that decides replies and tool calls, so every flow
@@ -169,7 +171,21 @@ uv run python -m demos.memory -u ada -t tuesday "How should you contact me about
 uv run python -m demos.memory -u ada --list
 ```
 
-A different thread recalls Ada's preference by vector search; another user (`-u bob`) sees nothing.
+A different thread recalls Ada's preference; another user (`-u bob`) sees nothing.
+
+**Embeddings are optional.** Without `OPENAI_EMBEDDING_MODEL`, recall loads all of the user's
+memories (fine for the handful a user typically has, and works with any chat model). With it,
+`put()` embeds each memory into pgvector and recall returns the three most relevant by cosine
+similarity, printing the scores. That works even when chat runs on a provider without an
+embeddings API, for example:
+
+```bash
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small OPENAI_EMBEDDING_BASE_URL=https://api.openai.com/v1 \
+OPENAI_EMBEDDING_API_KEY=sk-... uv run python -m demos.memory -u ada -t tuesday "Where do I live?"
+```
+
+pgvector columns have a fixed size, so switching embedding models (or turning embeddings on
+after memories were stored with a different model) stops with a message to run `./scripts/reset.sh`.
 
 ### The rest
 
@@ -207,8 +223,10 @@ experiment shows a failing case.
 
 - **State:** `PostgresSaver` checkpoints after every step, keyed by `config["configurable"]["thread_id"]`.
   Subgraphs inherit it and get their own `checkpoint_ns`.
-- **Memory:** `PostgresStore(index={"dims", "embed", "fields": ["text"]})` embeds on `put()` and
-  searches with pgvector; nodes reach it as `runtime.store`, and the user id arrives via `context=`.
+- **Memory:** nodes reach the `PostgresStore` as `runtime.store`, and the user id arrives via `context=`.
+  With an embedding model, the store gets `index={"dims", "embed", "fields": ["text"]}`: `put()` embeds
+  and `search(query=...)` ranks by pgvector cosine similarity (HNSW index). Without one, it's a plain
+  key-value store.
 - **Tracing:** `traced()` in `common.py` opens a Langfuse root span (or continues a trace id) inside
   `propagate_attributes(session_id=..., user_id=..., tags=...)`, and yields a LangChain
   `CallbackHandler` for the graph config. Every node, LLM call and tool call nests under it.

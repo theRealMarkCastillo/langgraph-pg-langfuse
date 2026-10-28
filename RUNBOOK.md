@@ -160,7 +160,11 @@ uv run python -m demos.memory -u ada -t monday "I prefer email over phone calls.
 uv run python -m demos.memory -u ada -t tuesday "How should you contact me about my order?"
 ```
 
-- A new thread recalls "prefers email". Show the isolation between users:
+- A new thread recalls "prefers email". The first line says which recall mode is active:
+  **all memories** by default, or **semantic search (pgvector)** with similarity scores when
+  `OPENAI_EMBEDDING_MODEL` is set. If you have an embedding endpoint, use semantic mode and point
+  at the scores: the relevant memory ranks first.
+- Show the isolation between users:
 
   ```bash
   uv run python -m demos.memory -u bob -t wed "How should you contact me about my order?"
@@ -249,8 +253,8 @@ uv run python -m demos.experiments --run-name live-model
 | `Nothing is waiting for approval` | The thread was already resumed. Start a new thread, or use `--checkpoint` to re-decide an old pause |
 | Traces don't appear in Langfuse | Wait 5-10 s and refresh; ingestion is asynchronous. Check that `langfuse-langfuse-worker-1` is running (`docker compose -f langfuse/docker-compose.yml ps`) |
 | Pirate replies when you expect normal ones | v2 is still `production`. Use `--version 1`, publish the original text again, or `./scripts/reset.sh --all` |
-| Memory recall returns nothing | Offline embeddings match on words (plus a small synonym list); phrase the question with related words, or set `OPENAI_EMBEDDING_MODEL` |
-| `expected N dimensions` from the memory demo | The embedding size changed. Run `./scripts/reset.sh` (it drops the stored vectors) |
+| Memory demo stops with "Stored memories use vector(N)…" | The embedding model changed since memories were stored. Run `./scripts/reset.sh` |
+| Embedding errors while chat works | Some chat providers have no embeddings API. Set `OPENAI_EMBEDDING_BASE_URL`/`_API_KEY` to one that does, or unset `OPENAI_EMBEDDING_MODEL` |
 | Langfuse login fails after `reset.sh --all` | It's still booting; wait about 30 s. The user is recreated from `langfuse/.env` |
 | Agent never calls tools (online) | The model or endpoint doesn't support tool calling. Pick a tool-capable model |
 

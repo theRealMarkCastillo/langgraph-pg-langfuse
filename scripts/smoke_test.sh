@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export OPENAI_BASE_URL=          # scripted offline model
+export OPENAI_EMBEDDING_MODEL=   # memory: default "recall all" mode (semantic mode is tested below)
 export LANGFUSE_TRACING_ENABLED=false
 export POSTGRES_URI=${POSTGRES_URI:-postgresql://langgraph:langgraph@localhost:5433/langgraph?sslmode=disable}
 export LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://localhost:3000}
@@ -48,11 +49,31 @@ expect "durable resume finishes without redoing work" "enrich: ok after 3 attemp
   demo durable -t "$RUN-job" --resume
 
 demo memory -u "$RUN" -t mon "I prefer email over phone calls. I live in Lisbon." >/dev/null
-expect "memory recalls across threads" "recalled from other threads: \['User said: I prefer email" \
+expect "memory recalls across threads" "recalled from other threads: \[.*I prefer email" \
   demo memory -u "$RUN" -t tue "How should you contact me about my order?"
 expect "memory is isolated per user" "recalled from other threads: nothing" \
   demo memory -u "$RUN-other" -t wed "How should you contact me about my order?"
 demo memory -u "$RUN" --forget >/dev/null
+
+# Semantic recall: pgvector + a stub embeddings endpoint, in a scratch database so the
+# vector size can't clash with an existing store.
+SCRATCH=lg_smoke_$$
+admin() { uv run --frozen python -c "import psycopg, sys; psycopg.connect(sys.argv[1], autocommit=True).execute(sys.argv[2])" "$POSTGRES_URI" "$1"; }
+admin "create database $SCRATCH"
+uv run --frozen python scripts/stub_embeddings.py 18081 &
+STUB=$!
+trap 'kill $STUB 2>/dev/null; admin "drop database if exists $SCRATCH with (force)"' EXIT
+sleep 2
+semantic() {
+  env POSTGRES_URI="${POSTGRES_URI%%/langgraph\?*}/$SCRATCH?sslmode=disable" \
+    OPENAI_EMBEDDING_BASE_URL=http://127.0.0.1:18081/v1 OPENAI_EMBEDDING_MODEL=stub-embed \
+    uv run --frozen python -m demos.memory "$@"
+}
+semantic -u ada -t mon "I prefer email over phone calls. I live in Lisbon. I work as a barista." >/dev/null
+expect "semantic memory ranks the relevant fact first" "recalled from other threads: \['User said: I live in Lisbon'" \
+  semantic -u ada -t tue "Where do I live?"
+expect "semantic memory stores vectors in pgvector" "recall mode: semantic search \(pgvector\)" \
+  semantic -u ada -t tue2 "Should you email me?"
 
 expect "summarize trims state" "messages in state: 2   summary: The user talked about" demo summarize -t "$RUN-sum"
 expect "fanout runs branches in parallel" "3 research branches ran in parallel" demo fanout -t "$RUN-fan"

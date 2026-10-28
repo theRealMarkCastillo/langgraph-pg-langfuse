@@ -1,10 +1,17 @@
-"""Long-term memory across threads: PostgresStore + pgvector semantic search.
+"""Long-term memory across threads: PostgresStore, optionally with pgvector search.
 
 Checkpoints are per-thread (short-term). The store is per-user and shared by all
 of that user's threads (long-term). Each turn:
-  recall   -> vector-search the user's memories for ones relevant to the message
+  recall   -> fetch the user's memories (see below)
   respond  -> answer with those memories in the prompt
   remember -> extract durable facts from the message and save them
+
+Recall has two modes:
+  - default: load all of the user's memories. Simple, and right for the handful
+    of facts a typical user accumulates.
+  - OPENAI_EMBEDDING_MODEL set: memories are embedded into pgvector, and recall
+    returns the few most relevant to the message by meaning. Needed once a user
+    has too many memories to fit in a prompt.
 
     uv run python -m demos.memory -u ada -t monday  "I prefer email over phone calls"
     uv run python -m demos.memory -u ada -t tuesday "How should you contact me about my order?"
@@ -72,9 +79,22 @@ def namespace(runtime: Runtime[Context]) -> tuple[str, str]:
     return ("memories", runtime.context.user_id)
 
 
+MAX_MEMORIES = 50  # without vector search, everything up to this goes into the prompt
+
+
+def semantic(runtime: Runtime[Context]) -> bool:
+    return runtime.store.index_config is not None
+
+
 def recall(state: State, runtime: Runtime[Context]) -> dict:
-    hits = runtime.store.search(namespace(runtime), query=last_human_text(state["messages"]), limit=3)
-    return {"recalled": [h.value["text"] for h in hits if (h.score or 0) > 0.2]}
+    if semantic(runtime):
+        # Vector similarity search in Postgres (pgvector) against the message text.
+        hits = runtime.store.search(namespace(runtime), query=last_human_text(state["messages"]), limit=3)
+        for h in hits:
+            print(f"    similarity {h.score:.2f}  {h.value['text']}")
+    else:
+        hits = runtime.store.search(namespace(runtime), limit=MAX_MEMORIES)
+    return {"recalled": [h.value["text"] for h in hits]}
 
 
 def respond(state: State, runtime: Runtime[Context]) -> dict:
@@ -98,7 +118,7 @@ def remember(state: State, runtime: Runtime[Context]) -> dict:
     ).content.strip()
     if out != "NONE":
         for fact in filter(None, (line.strip("-• ").strip() for line in out.splitlines())):
-            # put() embeds the "text" field and writes it to pgvector.
+            # With an embedding model, put() also embeds the "text" field into pgvector.
             runtime.store.put(namespace(runtime), str(uuid.uuid4()), {"text": fact})
             print(f"    saved memory: {fact}")
     return {}
@@ -137,6 +157,8 @@ def main() -> None:
             return
 
         graph = build_graph(checkpointer, store)
+        mode = "semantic search (pgvector)" if store.index_config else "all memories (no embedding model set)"
+        print(f"recall mode: {mode}")
         messages = [args.message] if args.message else ["I prefer email over phone calls. I live in Lisbon."]
         for text in messages:
             print(f"[user={args.user} thread={args.thread}] {text}")
