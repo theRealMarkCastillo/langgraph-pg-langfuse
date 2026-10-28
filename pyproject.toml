@@ -1,0 +1,30 @@
+[project]
+name = "langgraph-pg-langfuse"
+version = "0.1.0"
+description = "Runnable LangGraph demos with PostgreSQL state and self-hosted Langfuse tracing"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "theRealMarkCastillo" }]
+keywords = ["langgraph", "langfuse", "postgres", "pgvector", "llm", "agents", "observability"]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-openai>=1.7.3",
+    "langfuse>=5.0.4",
+    "langgraph>=1.2.18",
+    "langgraph-checkpoint-postgres>=3.2.0",
+    "psycopg[binary,pool]>=3.3.6",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

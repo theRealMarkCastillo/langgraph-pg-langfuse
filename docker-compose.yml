@@ -1,0 +1,26 @@
+# Postgres used by LangGraph's PostgresSaver to persist graph state (checkpoints).
+# Runs on host port 5433 so it doesn't collide with Langfuse's own Postgres on 5432.
+name: langgraph-state
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg18-trixie  # postgres 18 + pgvector, for the long-term memory store
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langgraph
+      POSTGRES_PASSWORD: langgraph
+      POSTGRES_DB: langgraph
+    ports:
+      - 127.0.0.1:5433:5432
+    volumes:
+      # Postgres 18+ keeps data in a versioned subdir (/var/lib/postgresql/18/docker),
+      # so mount the parent directory rather than .../data.
+      - langgraph_pg_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langgraph -d langgraph"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  langgraph_pg_data:

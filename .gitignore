@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.ruff_cache/
+
+# Virtual environments
+.venv
+
+# Local config with secrets (use .env.example as the template).
+# langfuse/.env is intentionally committed: it only holds local demo values.
+/.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
