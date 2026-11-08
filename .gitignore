@@ -19,3 +19,10 @@ wheels/
 .DS_Store
 .idea/
 .vscode/
+
+# Personal AI coding-tool setup (Entire, Claude Code, Codex): not part of the demo
+.entire/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
