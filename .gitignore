@@ -20,8 +20,7 @@ wheels/
 .idea/
 .vscode/
 
-# Personal AI coding-tool setup (Entire, Claude Code, Codex): not part of the demo
-.entire/
+# Personal AI coding-tool setup (Claude Code, Codex): not part of the demo
 .claude/
 .codex/
 AGENTS.md
